@@ -1,6 +1,6 @@
 
 #[allow(dead_code)]
-static SIGMA: [[u8; 16]; 12] = [
+static SIGMA: [[usize; 16]; 12] = [
    [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15 ],
    [14, 10, 4, 8, 9, 15, 13, 6, 1, 12, 0, 2, 11, 7, 5, 3 ],
    [11, 8, 12, 0, 5, 2, 15, 13, 10, 14, 3, 6, 7, 1, 9, 4 ],
@@ -22,18 +22,26 @@ static IV: [u64; 8] = [
     0x1f83d9abfb41bd6bu64, 0x5be0cd19137e2179u64
 ];
 
-fn rotr(v: &[u64; 16], l: u8) {
-    // (v >> l) | (v << (64 - l))
-    v
+fn rotr(v: u64, l: u8) -> u64 {
+    (v >> l)|(v << (64 - l))
 }
 
-fn mix(v: &[u64; 16], a, b, c, d, x, y) {
-    v[a] = v[a] + v[b] + x;
-    v[d] = (v[d] ^ v[a]);
+fn mix(v: &mut[u64; 16], a: usize, b: usize, c: usize, d: usize, x: u64, y: u64) {
+    v[a] = v[a].wrapping_add(v[b]).wrapping_add(x);
+    v[d] = rotr(v[d] ^ v[a], 32);
+
+    v[c] = v[c].wrapping_add(v[d]);
+    v[b] = rotr(v[b] ^ v[c], 24);
+
+    v[a] = v[a].wrapping_add(v[b]).wrapping_add(y);
+    v[d] = rotr(v[d] ^ v[a], 16);
+
+    v[c] = v[c].wrapping_add(v[d]);
+    v[b] = rotr(v[b] ^ v[c], 63);
 }
 
-#[allow(dead_code)]
-fn compress(h: [u64; 8], m: [u64; 16], t: [u64; 2], f: [u64; 16]) {
+#[allow(unused_variables)] // f is not used yet
+fn compress(h: &mut[u64; 8], m: [u64; 16], t: [u64; 2], f: [u64; 2]) {
     let mut v: [u64; 16] = [0; 16];
 
     // Prepare.
@@ -46,24 +54,46 @@ fn compress(h: [u64; 8], m: [u64; 16], t: [u64; 2], f: [u64; 16]) {
     v[12] ^= t[0];
     v[13] ^= t[1];
 
-    // TODO: check last block flag.
+    // TODO: check last block flag f.
 
     // Mixing.
     for i in 0..12 {
-        v = mix(&v, 0, 4,  8, 12, m[SIGMA[i][ 0]], m[SIGMA[i][ 1]]);
-        v = mix(&v, 1, 5,  9, 13, m[SIGMA[i][ 2]], m[SIGMA[i][ 3]]);
-        v = mix(&v, 2, 6, 10, 14, m[SIGMA[i][ 4]], m[SIGMA[i][ 5]]);
-        v = mix(&v, 3, 7, 11, 15, m[SIGMA[i][ 6]], m[SIGMA[i][ 7]]);
-        v = mix(&v, 0, 5, 10, 15, m[SIGMA[i][ 8]], m[SIGMA[i][ 9]]);
-        v = mix(&v, 1, 6, 11, 12, m[SIGMA[i][10]], m[SIGMA[i][11]]);
-        v = mix(&v, 2, 7,  8, 13, m[SIGMA[i][12]], m[SIGMA[i][13]]);
-        v = mix(&v, 3, 4,  9, 14, m[SIGMA[i][14]], m[SIGMA[i][15]]);
+        for j in 0..16 {
+          println!("{},{}: {:x}", i, j, v[j]);
+        }
+        println!("{:?}", SIGMA[i]);
+        mix(&mut v, 0, 4,  8, 12, m[SIGMA[i][ 0]], m[SIGMA[i][ 1]]);
+        mix(&mut v, 1, 5,  9, 13, m[SIGMA[i][ 2]], m[SIGMA[i][ 3]]);
+        mix(&mut v, 2, 6, 10, 14, m[SIGMA[i][ 4]], m[SIGMA[i][ 5]]);
+        mix(&mut v, 3, 7, 11, 15, m[SIGMA[i][ 6]], m[SIGMA[i][ 7]]);
+        mix(&mut v, 0, 5, 10, 15, m[SIGMA[i][ 8]], m[SIGMA[i][ 9]]);
+        mix(&mut v, 1, 6, 11, 12, m[SIGMA[i][10]], m[SIGMA[i][11]]);
+        mix(&mut v, 2, 7,  8, 13, m[SIGMA[i][12]], m[SIGMA[i][13]]);
+        mix(&mut v, 3, 4,  9, 14, m[SIGMA[i][14]], m[SIGMA[i][15]]);
     }
-    println!("{:?}", v);
+
+    for i in 0..8 {
+        h[i] = h[i] ^ v[i] ^ v[i + 8];
+    }
+
+    println!("{:?}", h);
 }
 
-pub fn hello_lib() {
-    println!("called blake2b's `hello_lib()`");
+// TODO: make input flexible and u8
+// TODO: add key
+pub fn blake2b(data: [u64; 16]) -> [u64; 8] {
+    let f: [u64; 2] = [0; 2];
+    let t: [u64; 2] = [0; 2];
+
+    let mut h: [u64; 8] = [0; 8];
+    for i in 0..8 {
+      h[i] = IV[i];
+    }
+    h[0] = h[0] ^ 0x01010000 ^ 64; // This only support len = 64
+    println!("{:?}", h);
+
+    compress(&mut h, data, t, f);
+    h
 }
 
 #[cfg(test)]
@@ -72,10 +102,20 @@ mod tests {
 
     #[test]
     fn test_it() {
-        let t: [u64; 2] = [3; 2];
-        let h: [u64; 8] = [1; 8];
-        let m: [u64; 16] = [2; 16];
-        let f: [u64; 16] = [4; 16];
-        compress(h, m, t, f);
+        let mut m: [u64; 16] = [0; 16];
+        m[0] = 0x0000000000636261u64;
+        print!("m: ");
+        for j in 0..16 {
+          print!("{:016x} ", m[j]);
+        }
+        println!("");
+
+        let h = blake2b(m);
+
+        print!("h: ");
+        for j in 0..8 {
+          print!("{:x}", h[j]);
+        }
+        println!("");
     }
 }
