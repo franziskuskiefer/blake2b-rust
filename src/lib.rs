@@ -49,8 +49,45 @@ fn inc_counter(t: [u64; 2], x: u64) -> [u64; 2] {
   result
 }
 
-fn compress(h: &mut[u64; 8], m: [u64; 16], t: [u64; 2], f: bool) {
+fn make_u8array(h: &[u64; 8]) -> [u8; 64] {
+    let mut result: [u8; 64] = [0; 64];
+    for i in (0..8).rev() {
+        result[0+(i*8)] = (h[i] & 0xFFu64) as u8;
+        result[1+(i*8)] = ((h[i] & 0xFF00u64) >> 8) as u8;
+        result[2+(i*8)] = ((h[i] & 0xFF0000u64) >> 16) as u8;
+        result[3+(i*8)] = ((h[i] & 0xFF000000u64) >> 24) as u8;
+        result[4+(i*8)] = ((h[i] & 0xFF00000000u64) >> 32) as u8;
+        result[5+(i*8)] = ((h[i] & 0xFF0000000000u64) >> 40) as u8;
+        result[6+(i*8)] = ((h[i] & 0xFF000000000000u64) >> 48) as u8;
+        result[7+(i*8)] = ((h[i] & 0xFF00000000000000u64) >> 56) as u8;
+    }
+    result
+}
+
+fn make_u64array(h: &[u8; 128]) -> [u64; 16] {
+    let mut result: [u64; 16] = [0; 16];
+    for i in 0..16 {
+        result[i] = h[0+8*i] as u64 | (h[1+8*i] as u64) << 8 |
+                    (h[2+8*i] as u64) << 16 | (h[3+8*i] as u64) << 24 |
+                    (h[4+8*i] as u64) << 32 | (h[5+8*i] as u64) << 40 |
+                    (h[6+8*i] as u64) << 48 | (h[7+8*i] as u64) << 56;
+    }
+    result
+}
+
+#[allow(dead_code)]
+fn print_block(x: &[u8; 128]) {
+    for i in 0..128 {
+        print!("{:02x}", x[i]);
+    }
+    println!("");
+}
+
+fn compress(h: &mut[u64; 8], m: [u8; 128], t: [u64; 2], f: bool) {
     let mut v: [u64; 16] = [0; 16];
+
+    // Read u8 data to u64.
+    let m = make_u64array(&m);
 
     // Prepare.
     for i in 0..8 {
@@ -80,24 +117,9 @@ fn compress(h: &mut[u64; 8], m: [u64; 16], t: [u64; 2], f: bool) {
     }
 }
 
-fn make_u8array(h: &[u64; 8]) -> [u8; 64] {
-    let mut result: [u8; 64] = [0; 64];
-    for i in (0..8).rev() {
-        result[0+(i*8)] = (h[i] & 0xFFu64) as u8;
-        result[1+(i*8)] = ((h[i] & 0xFF00u64) >> 8) as u8;
-        result[2+(i*8)] = ((h[i] & 0xFF0000u64) >> 16) as u8;
-        result[3+(i*8)] = ((h[i] & 0xFF000000u64) >> 24) as u8;
-        result[4+(i*8)] = ((h[i] & 0xFF00000000u64) >> 32) as u8;
-        result[5+(i*8)] = ((h[i] & 0xFF0000000000u64) >> 40) as u8;
-        result[6+(i*8)] = ((h[i] & 0xFF000000000000u64) >> 48) as u8;
-        result[7+(i*8)] = ((h[i] & 0xFF00000000000000u64) >> 56) as u8;
-    }
-    result
-}
-
-// TODO: make input flexible and u8
+// TODO: make input flexible
 // TODO: add key
-pub fn blake2b(data: [u64; 16]) -> [u8; 64] {
+pub fn blake2b(data: [u8; 128]) -> [u8; 64] {
     let f: bool = true; // XXX: This takes only one block at the moment. So it's the last.
 
     let mut t: [u64; 2] = [0; 2];
@@ -119,21 +141,38 @@ pub fn blake2b(data: [u64; 16]) -> [u8; 64] {
 mod tests {
     use super::*;
 
+    static EXPECTED_ABC: [u8; 64] = [
+        0xba, 0x80, 0xa5, 0x3f, 0x98, 0x1c, 0x4d, 0x0d, 0x6a, 0x27, 0x97,
+        0xb6, 0x9f, 0x12, 0xf6, 0xe9, 0x4c, 0x21, 0x2f, 0x14, 0x68, 0x5a,
+        0xc4, 0xb7, 0x4b, 0x12, 0xbb, 0x6f, 0xdb, 0xff, 0xa2, 0xd1, 0x7d,
+        0x87, 0xc5, 0x39, 0x2a, 0xab, 0x79, 0x2d, 0xc2, 0x52, 0xd5, 0xde,
+        0x45, 0x33, 0xcc, 0x95, 0x18, 0xd3, 0x8a, 0xa8, 0xdb, 0xf1, 0x92,
+        0x5a, 0xb9, 0x23, 0x86, 0xed, 0xd4, 0x00, 0x99, 0x23
+    ];
+
     #[test]
-    fn test_it() {
-        let mut m: [u64; 16] = [0; 16];
-        m[0] = 0x0000000000636261u64;
+    fn test_single_block() {
+        let mut m: [u8; 128] = [0; 128];
+        m[0] = 0x61;
+        m[1] = 0x62;
+        m[2] = 0x63;
 
         let h = blake2b(m);
 
-        let expected = [
-            0xba, 0x80, 0xa5, 0x3f, 0x98, 0x1c, 0x4d, 0x0d, 0x6a, 0x27, 0x97,
-            0xb6, 0x9f, 0x12, 0xf6, 0xe9, 0x4c, 0x21, 0x2f, 0x14, 0x68, 0x5a,
-            0xc4, 0xb7, 0x4b, 0x12, 0xbb, 0x6f, 0xdb, 0xff, 0xa2, 0xd1, 0x7d,
-            0x87, 0xc5, 0x39, 0x2a, 0xab, 0x79, 0x2d, 0xc2, 0x52, 0xd5, 0xde,
-            0x45, 0x33, 0xcc, 0x95, 0x18, 0xd3, 0x8a, 0xa8, 0xdb, 0xf1, 0x92,
-            0x5a, 0xb9, 0x23, 0x86, 0xed, 0xd4, 0x00, 0x99, 0x23
-        ];
-        assert_eq!(&expected[..], &h[..]);
+        assert_eq!(&EXPECTED_ABC[..], &h[..]);
+    }
+
+    #[test]
+    fn test_single_block_string() {
+        let m = "abc";
+        let m = m.as_bytes();
+        let mut data: [u8; 128] = [0; 128];
+        for i in 0..m.len() {
+            data[i] = m[i];
+        }
+
+        let h = blake2b(data);
+
+        assert_eq!(&EXPECTED_ABC[..], &h[..]);
     }
 }
