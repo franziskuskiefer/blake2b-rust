@@ -78,7 +78,7 @@ fn make_u64array(h: &[u8; 128]) -> [u64; 16] {
 #[allow(dead_code)]
 fn print_block(x: &[u8; 128]) {
     for i in 0..128 {
-        print!("{:02x}", x[i]);
+        print!("{:?}, ", x[i]);
     }
     println!("");
 }
@@ -117,21 +117,37 @@ fn compress(h: &mut[u64; 8], m: [u8; 128], t: [u64; 2], f: bool) {
     }
 }
 
-// TODO: make input flexible
 // TODO: add key
-pub fn blake2b(data: [u8; 128]) -> [u8; 64] {
-    let f: bool = true; // XXX: This takes only one block at the moment. So it's the last.
-
+pub fn blake2b(data: Vec<u8>) -> [u8; 64] {
+    let mut last_block: bool = false;
     let mut t: [u64; 2] = [0; 2];
-    t = inc_counter(t, 3);
 
     let mut h: [u64; 8] = [0; 8];
     for i in 0..8 {
       h[i] = IV[i];
     }
-    h[0] = h[0] ^ 0x01010000 ^ 64; // This only supports len = 64
+    h[0] = h[0] ^ 0x01010000 ^ 64; // This only supports the 512 version.
 
-    compress(&mut h, data, t, f);
+    let blocks = (data.len() / 128) as usize;
+    for i in 0..blocks {
+        let mut m: [u8; 128] = [0; 128];
+        m.clone_from_slice(&data[0+i*128 .. 0+i*128+128]);
+        t = inc_counter(t, 128u64);
+        compress(&mut h, m, t, last_block);
+    }
+
+    last_block = true;
+    // Pad last bits of data to a full block.
+    let mut m: [u8; 128] = [0; 128];
+    let remaining_bytes = data.len() - 128 * blocks;
+    let remaining_start = data.len() - remaining_bytes;
+    t = inc_counter(t, remaining_bytes as u64);
+    let mut j = 0;
+    for i in remaining_start..(remaining_start + remaining_bytes) {
+        m[j] = data[i];
+        j += 1;
+    }
+    compress(&mut h, m, t, last_block);
 
     // Make h little endian u8 array and return.
     make_u8array(&h)
@@ -152,27 +168,31 @@ mod tests {
 
     #[test]
     fn test_single_block() {
-        let mut m: [u8; 128] = [0; 128];
-        m[0] = 0x61;
-        m[1] = 0x62;
-        m[2] = 0x63;
-
+        let m: Vec<u8> = vec![0x61u8, 0x62, 0x63];
         let h = blake2b(m);
-
         assert_eq!(&EXPECTED_ABC[..], &h[..]);
     }
 
     #[test]
     fn test_single_block_string() {
-        let m = "abc";
-        let m = m.as_bytes();
-        let mut data: [u8; 128] = [0; 128];
-        for i in 0..m.len() {
-            data[i] = m[i];
-        }
-
-        let h = blake2b(data);
-
+        let m = String::from("abc");
+        let h = blake2b(m.into_bytes());
         assert_eq!(&EXPECTED_ABC[..], &h[..]);
+    }
+
+    #[test]
+    fn test_multi_block_string() {
+        let m = String::from("qwertzuiopasdfghjklyxcvbnm123456789qwertzuiopasdfghjklyxcvbnm123456789qwertzuiopasdfghjklyxcvbnm123456789qwertzuiopasdfghjklyxcvbnm123456789");
+        let h = blake2b(m.into_bytes());
+
+        let expected: [u8; 64] = [
+            0x5c, 0xc9, 0x7c, 0x7f, 0x9f, 0xf2, 0x00, 0x8b, 0x40, 0x12, 0x6f,
+            0x37, 0x3f, 0x43, 0x33, 0xfa, 0x34, 0x8d, 0x9f, 0x50, 0x06, 0xb8,
+            0x73, 0x57, 0xa6, 0xd8, 0x61, 0x12, 0xa1, 0xa0, 0x43, 0x95, 0x4d,
+            0xa2, 0xe2, 0x8f, 0x01, 0xb2, 0xf9, 0x55, 0xa9, 0x32, 0xfb, 0x8a,
+            0x8d, 0x0a, 0x17, 0x87, 0xd0, 0xc6, 0xd9, 0x62, 0x77, 0x9c, 0xbc,
+            0x58, 0xbf, 0xdf, 0x89, 0x48, 0x1c, 0x87, 0x46, 0x96
+        ];
+        assert_eq!(&expected[..], &h[..]);
     }
 }
