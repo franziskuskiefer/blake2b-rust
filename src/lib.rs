@@ -23,7 +23,7 @@ static IV: [u64; 8] = [
 ];
 
 fn rotr(v: u64, l: u8) -> u64 {
-    (v >> l)|(v << (64 - l))
+    (v >> l) ^ (v << (64 - l))
 }
 
 fn mix(v: &mut[u64; 16], a: usize, b: usize, c: usize, d: usize, x: u64, y: u64) {
@@ -40,28 +40,31 @@ fn mix(v: &mut[u64; 16], a: usize, b: usize, c: usize, d: usize, x: u64, y: u64)
     v[b] = rotr(v[b] ^ v[c], 63);
 }
 
-#[allow(unused_variables)] // f is not used yet
-fn compress(h: &mut[u64; 8], m: [u64; 16], t: [u64; 2], f: [u64; 2]) {
+fn inc_counter(t: [u64; 2], x: u64) -> [u64; 2] {
+  let mut result: [u64; 2] = [0; 2];
+  result[0] = t[0].wrapping_add(x);
+  if result[0] < x {
+    result[1] = t[1] + 1;
+  }
+  result
+}
+
+fn compress(h: &mut[u64; 8], m: [u64; 16], t: [u64; 2], f: bool) {
     let mut v: [u64; 16] = [0; 16];
 
     // Prepare.
     for i in 0..8 {
         v[i] = h[i];
+        v[i+8] = IV[i];
     }
-    for i in 8..16 {
-        v[i] = IV[i-8];
+    v[12] = v[12] ^ t[0];
+    v[13] = v[13] ^ t[1];
+    if f {
+      v[14] = !v[14];
     }
-    v[12] ^= t[0];
-    v[13] ^= t[1];
-
-    // TODO: check last block flag f.
 
     // Mixing.
     for i in 0..12 {
-        for j in 0..16 {
-          println!("{},{}: {:x}", i, j, v[j]);
-        }
-        println!("{:?}", SIGMA[i]);
         mix(&mut v, 0, 4,  8, 12, m[SIGMA[i][ 0]], m[SIGMA[i][ 1]]);
         mix(&mut v, 1, 5,  9, 13, m[SIGMA[i][ 2]], m[SIGMA[i][ 3]]);
         mix(&mut v, 2, 6, 10, 14, m[SIGMA[i][ 4]], m[SIGMA[i][ 5]]);
@@ -75,25 +78,41 @@ fn compress(h: &mut[u64; 8], m: [u64; 16], t: [u64; 2], f: [u64; 2]) {
     for i in 0..8 {
         h[i] = h[i] ^ v[i] ^ v[i + 8];
     }
+}
 
-    println!("{:?}", h);
+fn make_u8array(h: &[u64; 8]) -> [u8; 64] {
+    let mut result: [u8; 64] = [0; 64];
+    for i in (0..8).rev() {
+        result[0+(i*8)] = (h[i] & 0xFFu64) as u8;
+        result[1+(i*8)] = ((h[i] & 0xFF00u64) >> 8) as u8;
+        result[2+(i*8)] = ((h[i] & 0xFF0000u64) >> 16) as u8;
+        result[3+(i*8)] = ((h[i] & 0xFF000000u64) >> 24) as u8;
+        result[4+(i*8)] = ((h[i] & 0xFF00000000u64) >> 32) as u8;
+        result[5+(i*8)] = ((h[i] & 0xFF0000000000u64) >> 40) as u8;
+        result[6+(i*8)] = ((h[i] & 0xFF000000000000u64) >> 48) as u8;
+        result[7+(i*8)] = ((h[i] & 0xFF00000000000000u64) >> 56) as u8;
+    }
+    result
 }
 
 // TODO: make input flexible and u8
 // TODO: add key
-pub fn blake2b(data: [u64; 16]) -> [u64; 8] {
-    let f: [u64; 2] = [0; 2];
-    let t: [u64; 2] = [0; 2];
+pub fn blake2b(data: [u64; 16]) -> [u8; 64] {
+    let f: bool = true; // XXX: This takes only one block at the moment. So it's the last.
+
+    let mut t: [u64; 2] = [0; 2];
+    t = inc_counter(t, 3);
 
     let mut h: [u64; 8] = [0; 8];
     for i in 0..8 {
       h[i] = IV[i];
     }
-    h[0] = h[0] ^ 0x01010000 ^ 64; // This only support len = 64
-    println!("{:?}", h);
+    h[0] = h[0] ^ 0x01010000 ^ 64; // This only supports len = 64
 
     compress(&mut h, data, t, f);
-    h
+
+    // Make h little endian u8 array and return.
+    make_u8array(&h)
 }
 
 #[cfg(test)]
@@ -104,18 +123,17 @@ mod tests {
     fn test_it() {
         let mut m: [u64; 16] = [0; 16];
         m[0] = 0x0000000000636261u64;
-        print!("m: ");
-        for j in 0..16 {
-          print!("{:016x} ", m[j]);
-        }
-        println!("");
 
         let h = blake2b(m);
 
-        print!("h: ");
-        for j in 0..8 {
-          print!("{:x}", h[j]);
-        }
-        println!("");
+        let expected = [
+            0xba, 0x80, 0xa5, 0x3f, 0x98, 0x1c, 0x4d, 0x0d, 0x6a, 0x27, 0x97,
+            0xb6, 0x9f, 0x12, 0xf6, 0xe9, 0x4c, 0x21, 0x2f, 0x14, 0x68, 0x5a,
+            0xc4, 0xb7, 0x4b, 0x12, 0xbb, 0x6f, 0xdb, 0xff, 0xa2, 0xd1, 0x7d,
+            0x87, 0xc5, 0x39, 0x2a, 0xab, 0x79, 0x2d, 0xc2, 0x52, 0xd5, 0xde,
+            0x45, 0x33, 0xcc, 0x95, 0x18, 0xd3, 0x8a, 0xa8, 0xdb, 0xf1, 0x92,
+            0x5a, 0xb9, 0x23, 0x86, 0xed, 0xd4, 0x00, 0x99, 0x23
+        ];
+        assert_eq!(&expected[..], &h[..]);
     }
 }
